@@ -367,8 +367,30 @@ class QuarkOCP_MX(QuarkScheme):
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.emulate:
+            print(f"\nquark_ocp_mx.py QuarkOCP_MX -> apply_weights START")
+            print(f"self.out_dtype: {self.out_dtype}")
+            print(f"self.qscheme: {self.qscheme}")
+            print(f"self.weight_quant_spec: {self.weight_quant_spec}")
+            print(f"self.input_quant_spec: {self.input_quant_spec}")
+            print(f"self.dynamic_mxfp4_quant: {self.dynamic_mxfp4_quant}")
+            print(f"self.weight_dtype: {self.weight_dtype}")
+            print(f"self.input_dtype: {self.input_dtype}")
+            print(f"self.ocp_mx_scheme: {self.ocp_mx_scheme}")
+            print(f"self.packed_factor: {self.packed_factor}")
+            print(f"self.dequant_func: {self.dequant_func}")
+            print(f"self.quant_dequant_func: {self.quant_dequant_func}")
+            print(f"self.static_input_scales: {self.static_input_scales}")
+            print(f"self.emulate: {self.emulate}")
+            print(f"self.rocm_use_aiter_fp4_asm_gemm: {self.rocm_use_aiter_fp4_asm_gemm}")
+
+            print(f"x.dtype: {x.dtype}")
+            print(f"layer.weight.dtype: {layer.weight.dtype}")
+            print(f"layer.weight_scale.dtype: {layer.weight_scale.dtype}")
             dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
+            print(f"dq_w.dtype: {dq_w.dtype}")
             qdq_x = self.quant_dequant_func(x)
+            print(f"qdq_x.dtype: {qdq_x.dtype}")
+            print(f"quark_ocp_mx.py QuarkOCP_MX -> apply_weights END\n")
             return F.linear(qdq_x, dq_w, bias)
         else:
             return torch.ops.vllm.gemm_with_dynamic_quant(
