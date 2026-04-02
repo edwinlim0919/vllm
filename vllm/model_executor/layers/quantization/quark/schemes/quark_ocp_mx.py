@@ -36,6 +36,151 @@ from .quark_scheme import QuarkScheme
 logger = init_logger(__name__)
 
 
+# ---------- TENSOR SHAPE LOGGING ----------
+import os
+import time
+import json
+import threading
+from typing import (
+    Tuple,
+    Any,
+    Dict,
+    List,
+)
+
+LOG_PATH = os.environ.get("VLLM_MXFP4_QDQ_TENSOR_LOG", "/app/tensor_logs/vllm_mxfp4_qdq_tensor_log.jsonl")
+TENSOR_LOGGING_ENABLED = os.environ.get("VLLM_MXFP4_DEBUG", "0") == "1"
+
+tensor_log_lock = threading.Lock()
+tensor_log: Dict[Tuple[Any, ...], List[List[Any]]] = {}
+
+
+# Compact tuple for identifying unique tensor quant/dequant ops
+def tensor_op_sig(
+    layer: torch.nn.Module,
+    x: torch.Tensor,
+    w: torch.Tensor,
+    s: torch.Tensor,
+) -> Tuple[Any]:
+    return (
+        layer.__class__.__name__,
+        id(layer),
+        x.shape,
+        x.dtype,
+        x.device,
+        x.is_contiguous(),
+        x.stride(),
+        w.shape,
+        w.dtype,
+        w.device,
+        w.is_contiguous(),
+        w.stride(),
+        s.shape,
+        s.dtype,
+        s.device,
+        s.is_contiguous(),
+        s.stride(),
+    )
+
+
+# Track tensor shapes in memory during execution
+def record_apply_weights(
+    layer: torch.nn.Module,
+    x: torch.Tensor,
+    w: torch.Tensor,
+    s: torch.Tensor,
+) -> None:
+    now = time.time()
+    sig = tensor_op_sig(
+        layer,
+        x,
+        w,
+        s,
+    )
+
+    # Each entry that is identified by sig will track the following information for every invocation
+    # - timestamp
+    # - pass/fail
+    with tensor_log_lock:
+        # Always initially record PASS, but upon catching failure exception update the signature to FAIL
+        if sig in tensor_log:
+            tensor_log[sig].append([now, "PASS"])
+        else:
+            tensor_log[sig] = [[now, "PASS"]]
+
+
+def _to_jsonable(x: Any) -> Any:
+    """Convert torch/python objects into JSON-serializable values."""
+    if isinstance(x, (str, int, float, bool)) or x is None:
+        return x
+    if isinstance(x, tuple):
+        return list(x)
+    if isinstance(x, list):
+        return [_to_jsonable(v) for v in x]
+    if isinstance(x, dict):
+        return {str(k): _to_jsonable(v) for k, v in x.items()}
+    # torch.dtype, torch.device, torch.Size, etc.
+    return str(x)
+
+
+def _sig_to_record(sig: Tuple[Any, ...], events: List[List[Any]]) -> dict:
+    return {
+        "layer_cls": str(sig[0]),
+        "layer_id": sig[1],
+        "x": {
+            "shape": _to_jsonable(sig[2]),
+            "dtype": _to_jsonable(sig[3]),
+            "device": _to_jsonable(sig[4]),
+            "is_contiguous": sig[5],
+            "stride": _to_jsonable(sig[6]),
+        },
+        "w": {
+            "shape": _to_jsonable(sig[7]),
+            "dtype": _to_jsonable(sig[8]),
+            "device": _to_jsonable(sig[9]),
+            "is_contiguous": sig[10],
+            "stride": _to_jsonable(sig[11]),
+        },
+        "s": {
+            "shape": _to_jsonable(sig[12]),
+            "dtype": _to_jsonable(sig[13]),
+            "device": _to_jsonable(sig[14]),
+            "is_contiguous": sig[15],
+            "stride": _to_jsonable(sig[16]),
+        },
+        "num_calls": len(events),
+        "events": [
+            {
+                "ts": ev[0],
+                "status": ev[1],
+            }
+            for ev in events
+        ],
+    }
+
+
+def flush_debug_state(reason: str = "atexit") -> None:
+    with tensor_log_lock:
+        snapshot = list(tensor_log.items())
+    if not snapshot:
+        raise RuntimeError(f"Snapshot should exist when debugging MXFP4 inference.")
+
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    flush_ts = time.time()
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        for sig, events in snapshot:
+            record = {
+                "flush_reason": reason,
+                "flush_ts": flush_ts,
+                "record_type": "tensor_op_signature",
+                **_sig_to_record(sig, events),
+            }
+            f.write(json.dumps(record, separators=(",", ":")) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+# ---------- TENSOR SHAPE LOGGING ----------
+
+
 try:
     from aiter.ops.shuffle import shuffle_weight
     from aiter.ops.triton.gemm_afp4wfp4 import (
@@ -367,30 +512,17 @@ class QuarkOCP_MX(QuarkScheme):
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.emulate:
-            print(f"\nquark_ocp_mx.py QuarkOCP_MX -> apply_weights START")
-            print(f"self.out_dtype: {self.out_dtype}")
-            print(f"self.qscheme: {self.qscheme}")
-            print(f"self.weight_quant_spec: {self.weight_quant_spec}")
-            print(f"self.input_quant_spec: {self.input_quant_spec}")
-            print(f"self.dynamic_mxfp4_quant: {self.dynamic_mxfp4_quant}")
-            print(f"self.weight_dtype: {self.weight_dtype}")
-            print(f"self.input_dtype: {self.input_dtype}")
-            print(f"self.ocp_mx_scheme: {self.ocp_mx_scheme}")
-            print(f"self.packed_factor: {self.packed_factor}")
-            print(f"self.dequant_func: {self.dequant_func}")
-            print(f"self.quant_dequant_func: {self.quant_dequant_func}")
-            print(f"self.static_input_scales: {self.static_input_scales}")
-            print(f"self.emulate: {self.emulate}")
-            print(f"self.rocm_use_aiter_fp4_asm_gemm: {self.rocm_use_aiter_fp4_asm_gemm}")
+            if TENSOR_LOGGING_ENABLED:
+                record_apply_weights(layer, x, layer.weight, layer.weight_scale)
+                try:
+                    dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
+                except Exception:
+                    flush_debug_state(reason="EXCEPTION_APPLY_WEIGHTS")
+                    raise
+            else:
+                dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
 
-            print(f"x.dtype: {x.dtype}")
-            print(f"layer.weight.dtype: {layer.weight.dtype}")
-            print(f"layer.weight_scale.dtype: {layer.weight_scale.dtype}")
-            dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
-            print(f"dq_w.dtype: {dq_w.dtype}")
             qdq_x = self.quant_dequant_func(x)
-            print(f"qdq_x.dtype: {qdq_x.dtype}")
-            print(f"quark_ocp_mx.py QuarkOCP_MX -> apply_weights END\n")
             return F.linear(qdq_x, dq_w, bias)
         else:
             return torch.ops.vllm.gemm_with_dynamic_quant(
