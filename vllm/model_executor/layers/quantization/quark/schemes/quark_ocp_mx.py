@@ -36,10 +36,13 @@ from .quark_scheme import QuarkScheme
 logger = init_logger(__name__)
 
 
-# ---------- TENSOR SHAPE LOGGING ----------
+# ---------- TENSOR SHAPE LOGGING START ----------
 import os
+import sys
 import time
 import json
+import atexit
+import signal
 import threading
 from typing import (
     Tuple,
@@ -52,7 +55,7 @@ LOG_PATH = os.environ.get("VLLM_MXFP4_QDQ_TENSOR_LOG", "/app/tensor_logs/vllm_mx
 TENSOR_LOGGING_ENABLED = os.environ.get("VLLM_MXFP4_DEBUG", "0") == "1"
 
 tensor_log_lock = threading.Lock()
-tensor_log: Dict[Tuple[Any, ...], List[List[Any]]] = {}
+tensor_log: Dict[Tuple[Any, ...], Dict[float, str]] = {}
 
 
 # Compact tuple for identifying unique tensor quant/dequant ops
@@ -89,14 +92,9 @@ def record_apply_weights(
     x: torch.Tensor,
     w: torch.Tensor,
     s: torch.Tensor,
+    tensor_op_timestamp: float,
 ) -> None:
-    now = time.time()
-    sig = tensor_op_sig(
-        layer,
-        x,
-        w,
-        s,
-    )
+    sig = tensor_op_sig(layer, x, w, s)
 
     # Each entry that is identified by sig will track the following information for every invocation
     # - timestamp
@@ -104,9 +102,31 @@ def record_apply_weights(
     with tensor_log_lock:
         # Always initially record PASS, but upon catching failure exception update the signature to FAIL
         if sig in tensor_log:
-            tensor_log[sig].append([now, "PASS"])
+            # tensor_log[sig].append([tensor_op_timestamp, "PASS"])
+            tensor_log[sig][tensor_op_timestamp] = "PASS"
         else:
-            tensor_log[sig] = [[now, "PASS"]]
+            # tensor_log[sig] = [[tensor_op_timestamp, "PASS"]]
+            tensor_log[sig] = {tensor_op_timestamp: "PASS"}
+
+
+# Upon catching exception, mark failure for the failing tensor
+def mark_tensor_failure(
+    layer: torch.nn.Module,
+    x: torch.Tensor,
+    w: torch.Tensor,
+    s: torch.Tensor,
+    tensor_op_timestamp: float,
+) -> None:
+    sig = tensor_op_sig(layer, x, w, s)
+
+    # Each entry that is identified by sig will track the following information for every invocation
+    # - timestamp
+    # - pass/fail
+    with tensor_log_lock:
+        # Mark FAIL
+        assert sig in tensor_log
+        assert tensor_op_timestamp in tensor_log[sig]
+        tensor_log[sig][tensor_op_timestamp] = "FAIL"
 
 
 def _to_jsonable(x: Any) -> Any:
@@ -123,7 +143,7 @@ def _to_jsonable(x: Any) -> Any:
     return str(x)
 
 
-def _sig_to_record(sig: Tuple[Any, ...], events: List[List[Any]]) -> dict:
+def _sig_to_record(sig: Tuple[Any, ...], events: Dict[float, str]) -> dict:
     return {
         "layer_cls": str(sig[0]),
         "layer_id": sig[1],
@@ -151,19 +171,20 @@ def _sig_to_record(sig: Tuple[Any, ...], events: List[List[Any]]) -> dict:
         "num_calls": len(events),
         "events": [
             {
-                "ts": ev[0],
-                "status": ev[1],
+                "ts": ts,
+                "status": status,
             }
-            for ev in events
+            for ts, status in events.items()
         ],
     }
 
 
+# Called upon tensor quant/dequant op exception, or termination signal
 def flush_debug_state(reason: str = "atexit") -> None:
     with tensor_log_lock:
-        snapshot = list(tensor_log.items())
+        snapshot = [(sig, dict(events)) for sig, events in tensor_log.items()]
     if not snapshot:
-        raise RuntimeError(f"Snapshot should exist when debugging MXFP4 inference.")
+        return
 
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     flush_ts = time.time()
@@ -178,7 +199,23 @@ def flush_debug_state(reason: str = "atexit") -> None:
             f.write(json.dumps(record, separators=(",", ":")) + "\n")
         f.flush()
         os.fsync(f.fileno())
-# ---------- TENSOR SHAPE LOGGING ----------
+
+
+def flush_debug_state_noexcept(reason: str) -> None:
+    try:
+        flush_debug_state(reason=reason)
+    except Exception:
+        pass
+
+# Tensor log flush upon exit
+def handle_exit_signal(signum, frame) -> None:
+    flush_debug_state_noexcept(reason=f"signal_{signum}")
+    raise KeyboardInterrupt
+
+atexit.register(flush_debug_state_noexcept, "atexit")
+signal.signal(signal.SIGINT, handle_exit_signal)  # ctrl-c
+signal.signal(signal.SIGTERM, handle_exit_signal) # kill / container stop
+# ---------- TENSOR SHAPE LOGGING END ----------
 
 
 try:
@@ -512,16 +549,35 @@ class QuarkOCP_MX(QuarkScheme):
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.emulate:
+            # ---------- TENSOR SHAPE LOGGING START ----------
             if TENSOR_LOGGING_ENABLED:
-                record_apply_weights(layer, x, layer.weight, layer.weight_scale)
+                tensor_op_timestamp = time.time()
+                record_apply_weights(
+                    layer,
+                    x,
+                    layer.weight,
+                    layer.weight_scale,
+                    tensor_op_timestamp,
+                )
                 try:
                     dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
                 except Exception:
+                    # Change this tensor op status to FAIL
+                    mark_tensor_failure(
+                        layer,
+                        x,
+                        layer.weight,
+                        layer.weight_scale,
+                        tensor_op_timestamp,
+                    )
+                    # Flush tensor logs to disk
                     flush_debug_state(reason="EXCEPTION_APPLY_WEIGHTS")
                     raise
-            else:
+            else: 
                 dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
+            # ---------- TENSOR SHAPE LOGGING END ----------
 
+            # dq_w = self.dequant_func(layer.weight, layer.weight_scale, x.dtype)
             qdq_x = self.quant_dequant_func(x)
             return F.linear(qdq_x, dq_w, bias)
         else:
