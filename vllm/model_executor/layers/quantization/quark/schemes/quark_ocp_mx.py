@@ -180,6 +180,10 @@ def _sig_to_record(sig: Tuple[Any, ...], events: Dict[float, str]) -> dict:
 
 
 # Called upon tensor quant/dequant op exception, or termination signal
+# NOTE: For now only flush upon exception to avoid duplicate writes to the .jsonl file
+# TODO: Change it to also log upon ctrl-c, but somehow avoid logging twice
+#       - How many different processes/threads perform a write?
+#       - How to ensure each process/thread only performs 1 write, but always writes upon exception or termination?
 def flush_debug_state(reason: str = "atexit") -> None:
     with tensor_log_lock:
         snapshot = [(sig, dict(events)) for sig, events in tensor_log.items()]
@@ -201,20 +205,20 @@ def flush_debug_state(reason: str = "atexit") -> None:
         os.fsync(f.fileno())
 
 
-def flush_debug_state_noexcept(reason: str) -> None:
-    try:
-        flush_debug_state(reason=reason)
-    except Exception:
-        pass
+# def flush_debug_state_noexcept(reason: str) -> None:
+#     try:
+#         flush_debug_state(reason=reason)
+#     except Exception:
+#         pass
 
-# Tensor log flush upon exit
-def handle_exit_signal(signum, frame) -> None:
-    flush_debug_state_noexcept(reason=f"signal_{signum}")
-    raise KeyboardInterrupt
+# # Tensor log flush upon exit
+# def handle_exit_signal(signum, frame) -> None:
+#     flush_debug_state_noexcept(reason=f"signal_{signum}")
+#     raise KeyboardInterrupt
 
-atexit.register(flush_debug_state_noexcept, "atexit")
-signal.signal(signal.SIGINT, handle_exit_signal)  # ctrl-c
-signal.signal(signal.SIGTERM, handle_exit_signal) # kill / container stop
+# atexit.register(flush_debug_state_noexcept, "atexit")
+# signal.signal(signal.SIGINT, handle_exit_signal)  # ctrl-c
+# signal.signal(signal.SIGTERM, handle_exit_signal) # kill / container stop
 # ---------- TENSOR SHAPE LOGGING END ----------
 
 
