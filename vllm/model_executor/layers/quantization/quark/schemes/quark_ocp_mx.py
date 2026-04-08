@@ -222,6 +222,13 @@ def flush_debug_state(reason: str = "atexit") -> None:
 # ---------- TENSOR SHAPE LOGGING END ----------
 
 
+# ---------- ROOT CAUSE STACK TRACE LOGGING START ----------
+import traceback
+
+RECORD_STACKTRACE = False
+# ---------- ROOT CAUSE STACK TRACE LOGGING END ----------
+
+
 try:
     from aiter.ops.shuffle import shuffle_weight
     from aiter.ops.triton.gemm_afp4wfp4 import (
@@ -552,6 +559,24 @@ class QuarkOCP_MX(QuarkScheme):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
+
+        # ---------- ROOT CAUSE STACK TRACE LOGGING START ----------
+        if RECORD_STACKTRACE and x.dtype == torch.uint8:
+            with open("/app/tensor_logs/uint8_x_callers.log", "a") as f:
+                f.write("\n=== BAD UINT8 X IN APPLY_WEIGHTS ===\n")
+                f.write(f"layer_id={id(layer)} layer_cls={layer.__class__.__name__}\n")
+                f.write(f"x.shape={tuple(x.shape)} x.dtype={x.dtype} x.device={x.device}\n")
+                f.write(f"w.shape={tuple(layer.weight.shape)} w.dtype={layer.weight.dtype}\n")
+                f.write(f"s.shape={tuple(layer.weight_scale.shape)} s.dtype={layer.weight_scale.dtype}\n")
+                f.write(f"x.stride={x.stride()} contig={x.is_contiguous()}\n")
+                f.write(f"x.numel={x.numel()} element_size={x.element_size()}\n")
+                f.write(f"self.input_dtype={self.input_dtype} self.weight_dtype={self.weight_dtype} emulate={self.emulate}\n")
+                f.write("CALL STACK:\n")
+                f.write("".join(traceback.format_stack()))
+                f.write("\n")
+                f.flush()
+        # ---------- ROOT CAUSE STACK TRACE LOGGING END ----------
+
         if self.emulate:
             # ---------- TENSOR SHAPE LOGGING START ----------
             if TENSOR_LOGGING_ENABLED:

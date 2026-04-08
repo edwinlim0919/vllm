@@ -273,6 +273,16 @@ from vllm.v1.kv_cache_interface import (
 logger = init_logger(__name__)
 
 
+# # ---------- INCORRECT KVC DTYPE DEBUGGING START ----------
+# from typing import Dict, Tuple
+
+# DEBUG_DTYPE = True
+# LOG_PATH = "/app/tensor_logs/vllm_mxfp4_qdq_prefill_kvc_dtype.log"
+
+# prefill_kvc_dtype_log: Dict[str, ]
+# # ---------- INCORRECT KVC DTYPE DEBUGGING START ----------
+
+
 class MLAAttention(nn.Module, AttentionLayerBase):
     """Multi-Head Latent Attention layer.
 
@@ -2466,6 +2476,11 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
 
         for i in range(iters):
             toks = prefill_metadata.chunked_context.seq_tot[i]
+
+            # INCORRECT KVC DTYPE DEBUGGING
+            workspace_dtype_before_populate = workspace.dtype
+            workspace_shape_before_populate = workspace.shape
+
             if not use_fp8_prefill:
                 ops.gather_and_maybe_dequant_cache(
                     src_cache=kv_c_and_k_pe_cache,
@@ -2491,6 +2506,15 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
 
             # Extract kv_c_normed from workspace
             kv_c_normed = workspace[:toks][..., : self.kv_lora_rank]
+
+            # INCORRECT KVC DTYPE DEBUGGING
+            workspace_dtype_after_populate = workspace.dtype
+            workspace_shape_after_populate = workspace.shape
+            print(f"[DBG 0] MLACommonImpl._compute_prefill_context -> kv_c_normed.dtype: {kv_c_normed.dtype}, kv_c_normed.shape: {kv_c_normed.shape}, workspace_dtype_before_populate: {workspace_dtype_before_populate}, workspace_shape_before_populate: {workspace_shape_before_populate}, workspace_dtype_after_populate: {workspace_dtype_after_populate}, workspace_shape_after_populate: {workspace_shape_after_populate}, self.kv_cache_dtype: {self.kv_cache_dtype}, kv_c_and_k_pe_cache.dtype: {kv_c_and_k_pe_cache.dtype}, k_scale.dtype: {k_scale.dtype}")
+
+            # INCORRECT KVC DTYPE DEBUGGING
+            kv_c_normed_dtype_before_to = kv_c_normed.dtype
+
             # When FP8 weights are used without FP8 prefill, kv_b_proj expects
             # model dtype input and will quantize internally.
             # For quantized layers (AWQ/GPTQ) that lack a .weight attribute,
@@ -2502,6 +2526,13 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             )
             if use_fp8_prefill or _kv_b_proj_w_dtype != current_platform.fp8_dtype():
                 kv_c_normed = kv_c_normed.to(_kv_b_proj_w_dtype)
+
+            # INCORRECT KVC DTYPE DEBUGGING
+            kv_c_normed_dtype_after_to = kv_c_normed.dtype
+            if hasattr(self.kv_b_proj, "weight"):
+                print(f"[DBG 1] MLACommonImpl._compute_prefill_context -> kv_b_proj_has_weight: {True}, self.kv_b_proj.weight.dtype: {self.kv_b_proj.weight.dtype}, _kv_b_proj_w_dtype: {_kv_b_proj_w_dtype}, current_platform.fp8_dtype(): {current_platform.fp8_dtype()}, use_fp8_prefill: {use_fp8_prefill}, kv_c_normed_dtype_before_to: {kv_c_normed_dtype_before_to}, kv_c_normed_dtype_after_to: {kv_c_normed_dtype_after_to}")
+            else:
+                print(f"[DBG 1] MLACommonImpl._compute_prefill_context -> kv_b_proj_has_weight: {False}, self.kv_b_proj.params_dtype: {self.kv_b_proj.params_dtype}, _kv_b_proj_w_dtype: {_kv_b_proj_w_dtype}, current_platform.fp8_dtype(): {current_platform.fp8_dtype()}, use_fp8_prefill: {use_fp8_prefill}, kv_c_normed_dtype_before_to: {kv_c_normed_dtype_before_to}, kv_c_normed_dtype_after_to: {kv_c_normed_dtype_after_to}")
 
             k_pe = workspace[:toks][..., self.kv_lora_rank :].unsqueeze(1)
             kv_nope = self.kv_b_proj(kv_c_normed)[0].view(
