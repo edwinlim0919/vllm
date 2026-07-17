@@ -33,3 +33,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 rust/target/
+
+# Energy-efficient spec-decode measurement harness -- bind-mounted at runtime,
+# never used from the baked-in image copy. Excluding it keeps the `COPY ./ vllm/`
+# layer cache stable across harness edits (otherwise every harness change
+# invalidates rust-build / build_vllm / final).
+energy_harness/
