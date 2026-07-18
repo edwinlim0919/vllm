@@ -56,8 +56,10 @@ for C in $CONCURRENCIES; do
     NUM_PROMPTS=$((10 * C))
     WARMUP=$((2 * C))
     RUN_TAG="${TAG_PREFIX}_C${C}_spec${SPEC}"
-    if [ -d "${RESULT_DIR}/${RUN_TAG}" ]; then
-        echo "[sweep] skip ${RUN_TAG} (result dir exists)"
+    # Skip only COMPLETED points (row.json is written by measure_one on success);
+    # a failed/empty dir from an earlier crash re-runs instead of being skipped.
+    if [ -f "${RESULT_DIR}/${RUN_TAG}/row.json" ]; then
+        echo "[sweep] skip ${RUN_TAG} (already completed)"
         continue
     fi
     echo "[sweep] ===== C=${C}  num_prompts=${NUM_PROMPTS}  warmup=${WARMUP}  tag=${RUN_TAG} ====="
