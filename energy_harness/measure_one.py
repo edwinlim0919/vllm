@@ -315,7 +315,7 @@ def parse_args():
     ap.add_argument("--dataset-name", default="spec_bench")
     ap.add_argument("--dataset-path", default="",
                     help="dataset file path (required for spec_bench: question.jsonl)")
-    ap.add_argument("--spec-bench-output-len", type=int, default=256)
+    ap.add_argument("--spec-bench-output-len", type=int, default=4096)
     ap.add_argument("--spec-bench-category", default="",
                     help="restrict to one Spec-Bench category; empty = all categories")
     ap.add_argument("--num-prompts", type=int, default=1024)

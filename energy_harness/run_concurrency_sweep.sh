@@ -20,7 +20,7 @@ TOKENIZER=${TOKENIZER:-/models/models/gpt-oss-120b}
 GPU=${GPU:-0}
 DATASET_PATH=${DATASET_PATH:-/app/data/spec_bench_question.jsonl}
 CATEGORY=${CATEGORY:-}          # empty = all Spec-Bench categories
-OUT_LEN=${OUT_LEN:-256}
+OUT_LEN=${OUT_LEN:-4096}       # upper ceiling only; ignore_eos is OFF -> generation ends at natural EOS (run-to-completion)
 WINDOW=${WINDOW:-15}
 SEED=${SEED:-0}
 TEMP=${TEMP:-0.0}               # 0 = greedy -> identical spec-on/off outputs

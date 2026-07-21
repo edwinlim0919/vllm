@@ -27,8 +27,8 @@ TIMEOUT="${TIMEOUT:-1800}"
 LIMIT_ARG=""
 [ -n "${EVAL_LIMIT:-}" ] && LIMIT_ARG="--limit ${EVAL_LIMIT}"   # e.g. EVAL_LIMIT=50 for a quick smoke
 
-# lm-eval on demand (bake into the image later if we run this a lot).
-python3 -c "import lm_eval" 2>/dev/null || pip install --quiet lm-eval
+# lm-eval + API extras on demand (bake into the image later if we run this a lot).
+python3 -c "import lm_eval, tenacity" 2>/dev/null || pip install --quiet "lm-eval[api]"
 
 mkdir -p "$RESULT_DIR"
 CHAT_URL="${BASE_URL%/}/v1/chat/completions"

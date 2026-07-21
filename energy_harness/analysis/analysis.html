@@ -1,0 +1,239 @@
+<title>Energy of speculative decoding — dense vs MoE on MI300X</title>
+<style>
+  :root{
+    --bg:#f7f8fa;--panel:#fff;--ink:#161c26;--ink2:#4b5563;--muted:#8b95a3;
+    --hair:#e5e8ec;--grid:#eef1f4;--zero:#c0392b;
+    --dense1:#e07b39;--dense2:#b23a48;--moe1:#159c8c;--moe2:#2f6fb0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.55}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:27px;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em;font-weight:680}
+  h2{font-size:20px;margin:44px 0 4px;letter-spacing:-.01em;border-top:2px solid var(--ink);padding-top:16px}
+  h3{font-size:15.5px;margin:26px 0 2px;font-weight:650}
+  .eyebrow{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.15em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  .sub{color:var(--ink2);font-size:14.5px;margin:2px 0 0;max-width:74ch}
+  p{color:var(--ink2);font-size:14px;max-width:74ch}
+  .fig{background:var(--panel);border:1px solid var(--hair);border-radius:12px;padding:18px 18px 8px;margin:14px 0 4px;
+    box-shadow:0 1px 2px rgba(20,25,34,.04)}
+  .desc{font-size:13.5px;color:var(--ink2);background:#f9fafb;border-left:3px solid var(--hair);
+    padding:12px 16px;margin:10px 0 30px;border-radius:0 8px 8px 0;max-width:80ch}
+  .desc b{color:var(--ink)}
+  .desc .m{font-family:ui-monospace,monospace;font-size:12.5px;background:#eef1f4;padding:1px 5px;border-radius:4px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  svg{display:block;width:100%;height:auto;overflow:visible;font-family:ui-sans-serif,system-ui,sans-serif}
+  .cap{font-size:12px;color:var(--muted);margin:2px 2px 6px;font-family:ui-monospace,monospace}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2);margin:2px 4px 10px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:3px;border-radius:2px}
+  .tag{display:inline-block;font:600 10.5px/1 ui-monospace,monospace;padding:2px 6px;border-radius:5px;
+    background:#eef1f4;color:var(--ink2);margin-right:6px}
+  .warn{background:#fff8f3;border:1px solid #f2d9c4;border-radius:10px;padding:14px 16px;font-size:13.5px;color:#7c3a12;margin-top:14px}
+  .warn b{color:#9a3412}
+  code{font-family:ui-monospace,monospace;font-size:12.5px;background:#eef1f4;padding:1px 5px;border-radius:4px}
+  .tt{position:fixed;pointer-events:none;opacity:0;transition:opacity .07s;background:var(--ink);color:#fff;
+    font:500 11.5px/1.4 ui-monospace,monospace;padding:6px 9px;border-radius:7px;z-index:20;white-space:nowrap;
+    box-shadow:0 6px 18px rgba(0,0,0,.22)}
+</style>
+<div class="wrap">
+  <p class="eyebrow">Energy-efficient speculative decoding · MI300X · EAGLE-3</p>
+  <h1>The energy of speculative decoding is architecture-dependent</h1>
+  <p class="sub">Full 168-point sweep: 4 models × speculation length γ∈{0..5} × concurrency C∈{8..512}, run to completion, greedy, RedHat EAGLE-3 heads, GPU-package energy from the MI300X hardware counter (Zeus). All quantities below are <b>derived in this page's JS from the raw measured columns</b> — <span class="m">J_per_tok, window_throughput_tok_s, avg_power_W, acceptance_rate, mean_accepted_len</span> — deduped by run_tag (last write wins).</p>
+
+  <div id="root"></div>
+
+  <div class="warn" style="margin-top:40px">
+    <b>Caveats (read before citing):</b> single measurement per point (no error bars yet). The <b>Llama-70B high-C points are mildly KV-limited</b> (32k context cap → mean_running &lt; C at C512; γ0 J/tok non-monotonic C256→512), so its high-C magnitudes are soft. <b>Llama-8B C8/C16</b> have a finite-pool drain artifact (effective C ≈ 5.7 at C8). MFU (Fig 5) uses the bf16 peak (1.307 PFLOP/s) for all models; gpt-oss is MXFP4 but MI300X has no native FP4 → dequant-emulated, so bf16 peak is the right denominator, <b>pending exact code-trace of the dequant path</b>. It is the cross-model MFU ratio and its trend, not the absolute value, that carries the mechanism argument.
+  </div>
+</div>
+<div class="tt" id="tt"></div>
+
+<script>
+const DATA = {"Cs": [8, 16, 32, 64, 128, 256, 512], "gammas": [0, 1, 2, 3, 4, 5], "peak_flops": 1307000000000000.0, "models": {"llama31_8b": {"arch": "dense", "Pactive": 8030000000.0, "J": {"0": {"8": 0.82018, "16": 0.46098, "32": 0.20781, "64": 0.12557, "128": 0.08583, "256": 0.06559, "512": 0.05364}, "1": {"8": 0.68441, "16": 0.41247, "32": 0.3078, "64": 0.2153, "128": 0.16541, "256": 0.17588, "512": 0.1691}, "2": {"8": 0.56742, "16": 0.34646, "32": 0.24669, "64": 0.17146, "128": 0.14465, "256": 0.14338, "512": 0.15061}, "3": {"8": 0.62908, "16": 0.32843, "32": 0.23282, "64": 0.15962, "128": 0.13704, "256": 0.1342, "512": 0.14466}, "4": {"8": 0.65638, "16": 0.32455, "32": 0.22259, "64": 0.15655, "128": 0.13698, "256": 0.13751, "512": 0.14564}, "5": {"8": 0.572, "16": 0.32391, "32": 0.21925, "64": 0.16014, "128": 0.13823, "256": 0.13994, "512": 0.15093}}, "tp": {"0": {"8": 876.2, "16": 1533.7, "32": 3127.1, "64": 4747.7, "128": 6763.1, "256": 9567.4, "512": 12800.4}, "1": {"8": 860.4, "16": 1318.0, "32": 1744.8, "64": 2615.3, "128": 3378.2, "256": 3993.4, "512": 4377.6}, "2": {"8": 1002.2, "16": 1539.1, "32": 2178.4, "64": 3121.6, "128": 3977.4, "256": 4669.8, "512": 4908.8}, "3": {"8": 884.0, "16": 1567.5, "32": 2315.9, "64": 3325.0, "128": 4203.0, "256": 4840.3, "512": 5035.2}, "4": {"8": 899.9, "16": 1643.5, "32": 2368.3, "64": 3384.7, "128": 4488.1, "256": 4837.2, "512": 4976.4}, "5": {"8": 966.4, "16": 1626.7, "32": 2380.0, "64": 3396.2, "128": 4376.0, "256": 4707.5, "512": 4755.3}}, "acc": {"1": {"8": 0.7552, "16": 0.7417, "32": 0.7354, "64": 0.7402, "128": 0.7317, "256": 0.7276, "512": 0.7309}, "2": {"8": 0.6367, "16": 0.6318, "32": 0.6325, "64": 0.6254, "128": 0.6154, "256": 0.6158, "512": 0.6119}, "3": {"8": 0.5733, "16": 0.5381, "32": 0.5401, "64": 0.5391, "128": 0.5267, "256": 0.5247, "512": 0.5218}, "4": {"8": 0.4923, "16": 0.4615, "32": 0.4607, "64": 0.4652, "128": 0.4486, "256": 0.445, "512": 0.4456}, "5": {"8": 0.4476, "16": 0.3989, "32": 0.3961, "64": 0.3898, "128": 0.3846, "256": 0.3812, "512": 0.3757}}, "L": {"1": {"8": 0.755, "16": 0.742, "32": 0.735, "64": 0.74, "128": 0.732, "256": 0.728, "512": 0.731}, "2": {"8": 1.273, "16": 1.264, "32": 1.265, "64": 1.251, "128": 1.231, "256": 1.232, "512": 1.224}, "3": {"8": 1.72, "16": 1.614, "32": 1.62, "64": 1.617, "128": 1.58, "256": 1.574, "512": 1.565}, "4": {"8": 1.969, "16": 1.846, "32": 1.843, "64": 1.861, "128": 1.795, "256": 1.78, "512": 1.783}, "5": {"8": 2.238, "16": 1.994, "32": 1.98, "64": 1.949, "128": 1.923, "256": 1.906, "512": 1.878}}, "pw": {"0": {"8": 718.6, "16": 707.0, "32": 649.8, "64": 596.2, "128": 580.5, "256": 627.5, "512": 686.6}, "1": {"8": 588.8, "16": 543.6, "32": 537.1, "64": 563.1, "128": 558.8, "256": 702.3, "512": 740.2}, "2": {"8": 568.7, "16": 533.2, "32": 537.4, "64": 535.2, "128": 575.3, "256": 669.6, "512": 739.3}, "3": {"8": 556.1, "16": 514.8, "32": 539.2, "64": 530.7, "128": 576.0, "256": 649.6, "512": 728.4}, "4": {"8": 590.7, "16": 533.4, "32": 527.2, "64": 529.9, "128": 614.8, "256": 665.2, "512": 724.8}, "5": {"8": 552.8, "16": 526.9, "32": 521.8, "64": 543.9, "128": 604.9, "256": 658.8, "512": 717.7}}, "mr": {"0": {"8": 5.7, "16": 11.3, "32": 29.4, "64": 63.3, "128": 126.8, "256": 253.2, "512": 505.6}, "1": {"8": 6.1, "16": 15.7, "32": 31.5, "64": 62.8, "128": 125.7, "256": 251.5, "512": 503.1}, "2": {"8": 6.1, "16": 15.1, "32": 31.2, "64": 62.5, "128": 125.0, "256": 250.3, "512": 501.1}, "3": {"8": 4.8, "16": 14.1, "32": 31.2, "64": 62.5, "128": 124.4, "256": 249.6, "512": 499.1}, "4": {"8": 4.9, "16": 14.0, "32": 31.4, "64": 62.4, "128": 124.1, "256": 249.1, "512": 497.9}, "5": {"8": 4.9, "16": 13.8, "32": 31.1, "64": 61.8, "128": 124.3, "256": 248.5, "512": 497.4}}}, "llama33_70b": {"arch": "dense", "Pactive": 70600000000.0, "J": {"0": {"8": 4.65619, "16": 2.22624, "32": 1.26466, "64": 1.00051, "128": 0.78642, "256": 0.46774, "512": 0.52444}, "1": {"8": 3.8012, "16": 2.30464, "32": 1.5736, "64": 1.61382, "128": 2.52338, "256": 1.8083, "512": 2.90913}, "2": {"8": 3.11329, "16": 1.77506, "32": 1.26462, "64": 1.45038, "128": 2.28301, "256": 1.63901, "512": 1.96225}, "3": {"8": 2.73923, "16": 1.60586, "32": 1.17786, "64": 1.40155, "128": 1.85495, "256": 1.54799, "512": 2.06302}, "4": {"8": 2.66114, "16": 1.53727, "32": 1.16803, "64": 1.37606, "128": 1.98776, "256": 1.96959, "512": 2.31542}, "5": {"8": 2.52965, "16": 1.50208, "32": 1.1835, "64": 1.46884, "128": 2.01214, "256": 1.74693, "512": 1.80303}}, "tp": {"0": {"8": 161.1, "16": 335.0, "32": 587.8, "64": 722.3, "128": 902.5, "256": 1519.4, "512": 1346.4}, "1": {"8": 187.7, "16": 260.2, "32": 335.6, "64": 342.3, "128": 274.9, "256": 405.6, "512": 254.6}, "2": {"8": 219.6, "16": 322.5, "32": 391.4, "64": 402.1, "128": 314.1, "256": 440.5, "512": 374.1}, "3": {"8": 248.7, "16": 346.6, "32": 430.7, "64": 436.6, "128": 383.9, "256": 470.4, "512": 355.3}, "4": {"8": 253.4, "16": 354.8, "32": 464.4, "64": 440.2, "128": 344.2, "256": 359.2, "512": 314.3}, "5": {"8": 266.9, "16": 368.5, "32": 465.3, "64": 433.4, "128": 339.4, "256": 418.1, "512": 402.9}}, "acc": {"1": {"8": 0.7703, "16": 0.7751, "32": 0.7297, "64": 0.7436, "128": 0.7476, "256": 0.7514, "512": 0.7616}, "2": {"8": 0.6664, "16": 0.673, "32": 0.6246, "64": 0.6314, "128": 0.6253, "256": 0.628, "512": 0.6176}, "3": {"8": 0.5622, "16": 0.5584, "32": 0.5264, "64": 0.5289, "128": 0.5372, "256": 0.5449, "512": 0.5362}, "4": {"8": 0.4709, "16": 0.4716, "32": 0.4561, "64": 0.4525, "128": 0.4526, "256": 0.4497, "512": 0.4435}, "5": {"8": 0.4137, "16": 0.4165, "32": 0.3887, "64": 0.3885, "128": 0.3973, "256": 0.3795, "512": 0.3872}}, "L": {"1": {"8": 0.77, "16": 0.775, "32": 0.73, "64": 0.744, "128": 0.748, "256": 0.751, "512": 0.762}, "2": {"8": 1.333, "16": 1.346, "32": 1.249, "64": 1.263, "128": 1.251, "256": 1.256, "512": 1.235}, "3": {"8": 1.687, "16": 1.675, "32": 1.579, "64": 1.587, "128": 1.612, "256": 1.635, "512": 1.609}, "4": {"8": 1.884, "16": 1.886, "32": 1.825, "64": 1.81, "128": 1.81, "256": 1.799, "512": 1.774}, "5": {"8": 2.069, "16": 2.082, "32": 1.943, "64": 1.942, "128": 1.987, "256": 1.897, "512": 1.936}}, "pw": {"0": {"8": 750.0, "16": 745.7, "32": 743.4, "64": 722.7, "128": 709.7, "256": 710.7, "512": 706.1}, "1": {"8": 713.6, "16": 599.7, "32": 528.1, "64": 552.3, "128": 693.6, "256": 733.5, "512": 740.6}, "2": {"8": 683.8, "16": 572.5, "32": 495.0, "64": 583.3, "128": 717.1, "256": 721.9, "512": 734.1}, "3": {"8": 681.2, "16": 556.5, "32": 507.3, "64": 612.0, "128": 712.0, "256": 728.2, "512": 733.0}, "4": {"8": 674.3, "16": 545.4, "32": 542.4, "64": 605.8, "128": 684.3, "256": 707.5, "512": 727.7}, "5": {"8": 675.2, "16": 553.5, "32": 550.7, "64": 636.5, "128": 683.0, "256": 730.5, "512": 726.4}}, "mr": {"0": {"8": 8.0, "16": 15.8, "32": 31.8, "64": 63.4, "128": 126.7, "256": 253.3, "512": 382.3}, "1": {"8": 7.9, "16": 15.8, "32": 31.5, "64": 63.2, "128": 125.0, "256": 251.1, "512": 313.3}, "2": {"8": 7.9, "16": 15.7, "32": 31.4, "64": 62.7, "128": 124.8, "256": 249.1, "512": 318.4}, "3": {"8": 8.0, "16": 15.6, "32": 31.4, "64": 62.7, "128": 124.4, "256": 248.2, "512": 298.1}, "4": {"8": 7.9, "16": 15.7, "32": 31.2, "64": 62.7, "128": 124.6, "256": 247.2, "512": 295.6}, "5": {"8": 7.8, "16": 15.6, "32": 31.3, "64": 62.4, "128": 124.1, "256": 246.5, "512": 295.8}}}, "gptoss20b": {"arch": "MoE", "Pactive": 3600000000.0, "J": {"0": {"8": 0.82873, "16": 0.46154, "32": 0.26282, "64": 0.15134, "128": 0.08804, "256": 0.06081, "512": 0.04553}, "1": {"8": 0.55022, "16": 0.30893, "32": 0.17731, "64": 0.10601, "128": 0.07636, "256": 0.05747, "512": 0.04568}, "2": {"8": 0.43624, "16": 0.24143, "32": 0.14075, "64": 0.09396, "128": 0.06997, "256": 0.05355, "512": 0.04365}, "3": {"8": 0.41831, "16": 0.21687, "32": 0.13301, "64": 0.08945, "128": 0.06703, "256": 0.05262, "512": 0.04413}, "4": {"8": 0.37243, "16": 0.22623, "32": 0.13486, "64": 0.09149, "128": 0.06968, "256": 0.05708, "512": 0.04707}, "5": {"8": 0.39539, "16": 0.20621, "32": 0.13459, "64": 0.09062, "128": 0.0711, "256": 0.05743, "512": 0.0506}}, "tp": {"0": {"8": 754.7, "16": 1368.1, "32": 2378.6, "64": 4164.4, "128": 7450.8, "256": 11282.1, "512": 16195.6}, "1": {"8": 1121.7, "16": 1947.5, "32": 3415.1, "64": 5852.1, "128": 8663.1, "256": 12582.7, "512": 16179.3}, "2": {"8": 1390.6, "16": 2496.5, "32": 4365.1, "64": 6807.8, "128": 10091.2, "256": 13859.1, "512": 16402.8}, "3": {"8": 1444.6, "16": 2780.5, "32": 4661.3, "64": 7307.5, "128": 10653.3, "256": 14209.5, "512": 16557.4}, "4": {"8": 1605.7, "16": 2651.8, "32": 4729.5, "64": 7439.5, "128": 10334.1, "256": 12653.3, "512": 15948.9}, "5": {"8": 1529.4, "16": 2930.6, "32": 4773.3, "64": 7608.8, "128": 10310.7, "256": 13072.0, "512": 14627.2}}, "acc": {"1": {"8": 0.8177, "16": 0.789, "32": 0.7976, "64": 0.8158, "128": 0.7865, "256": 0.7777, "512": 0.7746}, "2": {"8": 0.7397, "16": 0.7563, "32": 0.7599, "64": 0.7292, "128": 0.7013, "256": 0.6858, "512": 0.6712}, "3": {"8": 0.6023, "16": 0.6724, "32": 0.6429, "64": 0.6647, "128": 0.6295, "256": 0.6219, "512": 0.5943}, "4": {"8": 0.5856, "16": 0.5336, "32": 0.5628, "64": 0.5973, "128": 0.5591, "256": 0.5429, "512": 0.528}, "5": {"8": 0.4595, "16": 0.5309, "32": 0.5138, "64": 0.549, "128": 0.506, "256": 0.4788, "512": 0.4671}}, "L": {"1": {"8": 0.818, "16": 0.789, "32": 0.798, "64": 0.816, "128": 0.786, "256": 0.778, "512": 0.775}, "2": {"8": 1.479, "16": 1.513, "32": 1.52, "64": 1.458, "128": 1.403, "256": 1.372, "512": 1.342}, "3": {"8": 1.807, "16": 2.017, "32": 1.929, "64": 1.994, "128": 1.889, "256": 1.866, "512": 1.783}, "4": {"8": 2.342, "16": 2.134, "32": 2.251, "64": 2.389, "128": 2.236, "256": 2.172, "512": 2.112}, "5": {"8": 2.297, "16": 2.655, "32": 2.569, "64": 2.745, "128": 2.53, "256": 2.394, "512": 2.335}}, "pw": {"0": {"8": 625.5, "16": 631.4, "32": 625.1, "64": 630.2, "128": 656.0, "256": 686.0, "512": 737.4}, "1": {"8": 617.2, "16": 601.6, "32": 605.5, "64": 620.4, "128": 661.5, "256": 723.2, "512": 739.1}, "2": {"8": 606.7, "16": 602.7, "32": 614.4, "64": 639.7, "128": 706.1, "256": 742.2, "512": 715.9}, "3": {"8": 604.3, "16": 603.0, "32": 620.0, "64": 653.6, "128": 714.1, "256": 747.7, "512": 730.7}, "4": {"8": 598.0, "16": 599.9, "32": 637.8, "64": 680.7, "128": 720.1, "256": 722.3, "512": 750.7}, "5": {"8": 604.7, "16": 604.3, "32": 642.4, "64": 689.5, "128": 733.1, "256": 750.7, "512": 740.1}}, "mr": {"0": {"8": 8.0, "16": 16.0, "32": 31.9, "64": 63.9, "128": 127.6, "256": 255.3, "512": 510.4}, "1": {"8": 8.0, "16": 16.0, "32": 31.8, "64": 63.8, "128": 127.5, "256": 255.3, "512": 509.5}, "2": {"8": 8.0, "16": 15.9, "32": 31.9, "64": 63.6, "128": 127.3, "256": 254.7, "512": 508.5}, "3": {"8": 8.0, "16": 15.9, "32": 31.9, "64": 63.7, "128": 127.2, "256": 254.4, "512": 508.1}, "4": {"8": 8.0, "16": 15.8, "32": 31.8, "64": 63.6, "128": 127.3, "256": 254.4, "512": 508.6}, "5": {"8": 7.9, "16": 15.9, "32": 31.9, "64": 63.6, "128": 127.1, "256": 254.2, "512": 507.9}}}, "gptoss120b": {"arch": "MoE", "Pactive": 5100000000.0, "J": {"0": {"8": 1.48447, "16": 1.03718, "32": 0.68423, "64": 0.45414, "128": 0.2793, "256": 0.16983, "512": 0.10562}, "1": {"8": 1.17099, "16": 0.82303, "32": 0.51262, "64": 0.32711, "128": 0.20577, "256": 0.1354, "512": 0.09584}, "2": {"8": 1.09672, "16": 0.73573, "32": 0.45939, "64": 0.28608, "128": 0.18664, "256": 0.12472, "512": 0.09103}, "3": {"8": 1.07054, "16": 0.7045, "32": 0.43656, "64": 0.27303, "128": 0.17871, "256": 0.12521, "512": 0.08948}, "4": {"8": 1.10727, "16": 0.70853, "32": 0.43434, "64": 0.27451, "128": 0.18454, "256": 0.12963, "512": 0.09575}, "5": {"8": 1.14634, "16": 0.7184, "32": 0.44831, "64": 0.27984, "128": 0.19241, "256": 0.1329, "512": 0.10336}}, "tp": {"0": {"8": 412.9, "16": 626.5, "32": 967.7, "64": 1564.8, "128": 2651.0, "256": 4421.3, "512": 7103.5}, "1": {"8": 542.4, "16": 791.4, "32": 1337.5, "64": 2181.0, "128": 3558.5, "256": 5540.5, "512": 7571.7}, "2": {"8": 591.2, "16": 922.0, "32": 1527.3, "64": 2543.3, "128": 4017.8, "256": 6016.8, "512": 7729.3}, "3": {"8": 611.3, "16": 970.6, "32": 1611.7, "64": 2665.4, "128": 4197.0, "256": 5996.3, "512": 8391.1}, "4": {"8": 593.8, "16": 975.3, "32": 1647.6, "64": 2686.8, "128": 4064.5, "256": 5791.4, "512": 7841.6}, "5": {"8": 578.4, "16": 967.9, "32": 1611.6, "64": 2675.0, "128": 3898.5, "256": 5649.1, "512": 7264.5}}, "acc": {"1": {"8": 0.7367, "16": 0.7104, "32": 0.6927, "64": 0.7094, "128": 0.7003, "256": 0.694, "512": 0.6917}, "2": {"8": 0.578, "16": 0.5975, "32": 0.56, "64": 0.5882, "128": 0.5759, "256": 0.5653, "512": 0.5684}, "3": {"8": 0.4883, "16": 0.4938, "32": 0.4594, "64": 0.4781, "128": 0.479, "256": 0.4716, "512": 0.4705}, "4": {"8": 0.4059, "16": 0.4078, "32": 0.3855, "64": 0.4127, "128": 0.4046, "256": 0.3954, "512": 0.3951}, "5": {"8": 0.3421, "16": 0.3525, "32": 0.3283, "64": 0.3584, "128": 0.344, "256": 0.3441, "512": 0.338}}, "L": {"1": {"8": 0.737, "16": 0.71, "32": 0.693, "64": 0.709, "128": 0.7, "256": 0.694, "512": 0.692}, "2": {"8": 1.156, "16": 1.195, "32": 1.12, "64": 1.176, "128": 1.152, "256": 1.131, "512": 1.137}, "3": {"8": 1.465, "16": 1.481, "32": 1.378, "64": 1.434, "128": 1.437, "256": 1.415, "512": 1.412}, "4": {"8": 1.624, "16": 1.631, "32": 1.542, "64": 1.651, "128": 1.619, "256": 1.582, "512": 1.58}, "5": {"8": 1.711, "16": 1.763, "32": 1.642, "64": 1.792, "128": 1.72, "256": 1.721, "512": 1.69}}, "pw": {"0": {"8": 613.0, "16": 649.8, "32": 662.1, "64": 710.6, "128": 740.4, "256": 750.9, "512": 750.3}, "1": {"8": 635.1, "16": 651.3, "32": 685.6, "64": 713.4, "128": 732.2, "256": 750.2, "512": 725.7}, "2": {"8": 648.4, "16": 678.3, "32": 701.6, "64": 727.6, "128": 749.9, "256": 750.4, "512": 703.6}, "3": {"8": 654.4, "16": 683.8, "32": 703.6, "64": 727.7, "128": 750.1, "256": 750.8, "512": 750.8}, "4": {"8": 657.5, "16": 691.0, "32": 715.6, "64": 737.6, "128": 750.1, "256": 750.7, "512": 750.9}, "5": {"8": 663.0, "16": 695.3, "32": 722.5, "64": 748.6, "128": 750.1, "256": 750.8, "512": 750.9}}, "mr": {"0": {"8": 8.0, "16": 16.0, "32": 31.9, "64": 63.8, "128": 127.6, "256": 255.4, "512": 510.4}, "1": {"8": 8.0, "16": 16.0, "32": 31.9, "64": 63.7, "128": 127.3, "256": 254.6, "512": 509.5}, "2": {"8": 8.0, "16": 16.0, "32": 31.9, "64": 63.6, "128": 127.0, "256": 254.2, "512": 508.5}, "3": {"8": 8.0, "16": 16.0, "32": 31.9, "64": 63.5, "128": 127.1, "256": 254.3, "512": 508.7}, "4": {"8": 8.0, "16": 15.9, "32": 31.9, "64": 63.5, "128": 127.0, "256": 254.1, "512": 508.1}, "5": {"8": 8.0, "16": 15.9, "32": 31.9, "64": 63.5, "128": 127.0, "256": 254.1, "512": 508.0}}}}};
+const tt=document.getElementById('tt');
+const MODELS=["llama31_8b","llama33_70b","gptoss20b","gptoss120b"];
+const NAME={llama31_8b:"Llama-3.1-8B",llama33_70b:"Llama-3.3-70B",gptoss20b:"gpt-oss-20B",gptoss120b:"gpt-oss-120B"};
+const COL={llama31_8b:"var(--dense1)",llama33_70b:"var(--dense2)",gptoss20b:"var(--moe1)",gptoss120b:"var(--moe2)"};
+const HEX={llama31_8b:"#e07b39",llama33_70b:"#b23a48",gptoss20b:"#159c8c",gptoss120b:"#2f6fb0"};
+const GRAMP=["#c3ccd6","#96a3b2","#6f7f90","#54606f","#3a4453","#1e2733"]; // gamma 0..5 sequential
+const Cs=DATA.Cs, GAMMAS=DATA.gammas, PEAK=DATA.peak_flops;
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a={})=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const g=m=>DATA.models[m];
+// ---- derived (measured -> quantity), all transparent ----
+const J =(m,gm,c)=>g(m).J[gm]?.[c];
+const TP=(m,gm,c)=>g(m).tp[gm]?.[c];
+const PW=(m,gm,c)=>g(m).pw[gm]?.[c];
+const ACC=(m,gm,c)=>g(m).acc[gm]?.[c];
+const L =(m,gm,c)=>g(m).L[gm]?.[c];               // mean accepted DRAFT tokens (= gamma*acc)
+const dJ =(m,gm,c)=>100*(J(m,gm,c)-J(m,0,c))/J(m,0,c);
+function oracle(m,c){let bg=1,bv=J(m,1,c);for(let k=2;k<=5;k++){if(J(m,k,c)<bv){bv=J(m,k,c);bg=k;}}return{gm:bg,J:bv,dJ:100*(bv-J(m,0,c))/J(m,0,c)};}
+const Femit=(m,gm,c)=>L(m,gm,c)+1;               // mean tokens emitted per target pass (accepted drafts + 1 bonus)
+const compAmp=(m,gm,c)=>(2*gm+1)/Femit(m,gm,c);  // fwd-pass token-processing per output token
+const MFU0=(m,c)=>100*TP(m,0,c)*2*g(m).Pactive/PEAK;
+const MFUv=(m,gm,c)=>100*((gm+1)/Femit(m,gm,c))*TP(m,gm,c)*2*g(m).Pactive/PEAK;
+
+// ---------- generic line chart ----------
+function chart(spec){
+  const W=spec.W||880,H=spec.H||300,L0=52,R=spec.R||96,T=30,B=42;
+  const pw=W-L0-R, ph=H-T-B;
+  const s=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});
+  const xi=i=>L0+(Cs.length>1?i/(Cs.length-1):0)*pw;
+  let ymin=spec.ymin,ymax=spec.ymax;
+  if(ymin==null||ymax==null){let lo=Infinity,hi=-Infinity;spec.series.forEach(se=>se.pts.forEach(p=>{if(p[1]!=null){lo=Math.min(lo,p[1]);hi=Math.max(hi,p[1]);}}));ymin=ymin??lo;ymax=ymax??hi;}
+  const log=spec.ylog;
+  const yv=v=>log?Math.log10(v):v;
+  const y0=yv(ymin),y1=yv(ymax);
+  const yp=v=>T+(1-(yv(v)-y0)/(y1-y0))*ph;
+  // gridlines
+  (spec.yticks||[]).forEach(v=>{
+    const y=yp(v);
+    s.appendChild(el("line",{x1:L0,x2:L0+pw,y1:y,y2:y,stroke:(v===0&&spec.zero)?"var(--zero)":"var(--grid)","stroke-width":(v===0&&spec.zero)?1.4:1,"stroke-dasharray":(v===0&&spec.zero)?"4 3":""}));
+    const t=el("text",{x:L0-8,y:y+3.5,"text-anchor":"end",fill:"var(--muted)","font-size":10.5,"font-family":"ui-monospace,monospace"});
+    t.textContent=spec.yfmt?spec.yfmt(v):v; s.appendChild(t);
+  });
+  // x ticks
+  Cs.forEach((c,i)=>{const t=el("text",{x:xi(i),y:H-B+18,"text-anchor":"middle",fill:"var(--ink2)","font-size":11,"font-family":"ui-monospace,monospace"});t.textContent=c;s.appendChild(t);});
+  const xt=el("text",{x:L0+pw/2,y:H-4,"text-anchor":"middle",fill:"var(--ink2)","font-size":12,"font-weight":600});xt.textContent=spec.xlabel||"concurrency C";s.appendChild(xt);
+  const yl=el("text",{x:14,y:T+ph/2,"text-anchor":"middle",fill:"var(--ink2)","font-size":12,"font-weight":600,transform:`rotate(-90 14 ${T+ph/2})`});yl.textContent=spec.ylabel||"";s.appendChild(yl);
+  if(spec.title){const tt2=el("text",{x:L0,y:16,fill:"var(--ink)","font-size":13,"font-weight":650});tt2.textContent=spec.title;s.appendChild(tt2);}
+  // series
+  spec.series.forEach(se=>{
+    let d="";se.pts.forEach((p,i)=>{if(p[1]==null)return;d+=(d?"L":"M")+xi(p[0])+" "+yp(p[1])+" ";});
+    if(d)s.appendChild(el("path",{d,fill:"none",stroke:se.color,"stroke-width":se.width||2,"stroke-linecap":"round","stroke-linejoin":"round","stroke-dasharray":se.dash||"",opacity:se.op??1}));
+    se.pts.forEach((p,i)=>{
+      if(p[1]==null)return;const cx=xi(p[0]),cy=yp(p[1]);
+      if(se.dots!==false)s.appendChild(el("circle",{cx,cy,r:se.r||2.6,fill:se.color,stroke:"#fff","stroke-width":1}));
+      if(se.ptlab){const t=el("text",{x:cx,y:cy-7,"text-anchor":"middle",fill:se.color,"font-size":9.5,"font-weight":700,"font-family":"ui-monospace,monospace"});t.textContent=se.ptlab[i];s.appendChild(t);}
+      // hover
+      const hit=el("circle",{cx,cy,r:9,fill:"transparent",style:"cursor:pointer"});
+      hit.addEventListener("pointermove",e=>{tt.innerHTML=(se.name?se.name+"<br>":"")+`C=${Cs[p[0]]} · ${spec.tip?spec.tip(p[1]):p[1]}`;tt.style.left=(e.clientX+13)+"px";tt.style.top=(e.clientY+13)+"px";tt.style.opacity=1;});
+      hit.addEventListener("pointerleave",()=>tt.style.opacity=0);
+      s.appendChild(hit);
+    });
+    if(se.label){const last=se.pts.filter(p=>p[1]!=null).pop();if(last){const t=el("text",{x:xi(last[0])+8,y:yp(last[1])+3.5,fill:se.color,"font-size":11,"font-weight":650});t.textContent=se.label;s.appendChild(t);}}
+  });
+  return s;
+}
+function fig(parent,svg,capText){const f=document.createElement("div");f.className="fig";f.appendChild(svg);if(capText){const c=document.createElement("div");c.className="cap";c.textContent=capText;f.appendChild(c);}parent.appendChild(f);return f;}
+function desc(parent,html){const d=document.createElement("div");d.className="desc";d.innerHTML=html;parent.appendChild(d);}
+function h2(p,t){const e=document.createElement("h2");e.textContent=t;p.appendChild(e);}
+function h3(p,t){const e=document.createElement("h3");e.textContent=t;p.appendChild(e);}
+function para(p,html){const e=document.createElement("p");e.innerHTML=html;p.appendChild(e);}
+function legend(p,items){const d=document.createElement("div");d.className="legend";items.forEach(it=>{d.innerHTML+=`<span><span class="sw" style="background:${it.c}"></span>${it.t}</span>`;});p.appendChild(d);}
+
+const R=document.getElementById("root");
+
+/* ============ §1 THE RESULT ============ */
+h2(R,"1 · The result");
+
+/* F1 master oracle */
+h3(R,"Figure 1 — Best-case energy of speculation vs no speculation");
+legend(R,[{c:HEX.llama31_8b,t:"Llama-3.1-8B (dense)"},{c:HEX.llama33_70b,t:"Llama-3.3-70B (dense)"},{c:HEX.gptoss20b,t:"gpt-oss-20B (MoE)"},{c:HEX.gptoss120b,t:"gpt-oss-120B (MoE)"}]);
+{
+  const series=MODELS.map(m=>{const pts=Cs.map((c,i)=>[i,oracle(m,c).dJ]);const lab=Cs.map(c=>"γ"+oracle(m,c).gm);return{name:NAME[m],color:HEX[m],width:2.6,pts,ptlab:lab,label:"",r:3.4,tip:v=>v.toFixed(1)+"%"};});
+  fig(R,chart({W:900,H:360,series,ymin:-70,ymax:180,yticks:[-60,-40,-20,0,20,60,120,180],zero:true,ylabel:"ΔJ/tok vs no-spec  (%)",yfmt:v=>v>0?"+"+v:v,tip:v=>v.toFixed(1)+"%"}),
+    "point labels = the energy-optimal γ chosen at that concurrency (oracle)");
+}
+desc(R,`<b>What it is.</b> For each model and concurrency C, take the <b>oracle best</b> speculation length — the γ∈{1..5} with the lowest measured <span class="m">J_per_tok</span> — and plot its energy relative to no-speculation: <span class="m">ΔJ% = (min_γ J[γ] − J[γ0]) / J[γ0] × 100</span>. Negative = speculation saves energy; the dashed line at 0 is the break-even. Each point is labelled with <i>which</i> γ won there.
+  <br><br><b>What it shows.</b> The two <b>dense</b> models cross the zero line — speculation saves energy at low load then <b>costs</b> it, steeply, at high load (Llama-8B crosses ≈C32, Llama-70B ≈C64; the winning γ collapses to nothing → the oracle would turn speculation off). The two <b>MoE</b> models <b>never cross</b>: speculation saves at every C, and the larger MoE (gpt-oss-120B, 128 experts) holds its benefit <i>better</i> at high load (−15% at C512) than the smaller one (−4%). This is the thesis in one panel.
+  <br><br><b>Caveat.</b> The oracle line is optimistic — it picks the best γ per point in hindsight. Figure 2 shows every fixed-γ configuration, i.e. what a non-adaptive deployment actually gets.`);
+
+/* F2 per-model all gamma */
+h3(R,"Figure 2 — Every speculation length, per model (what a fixed γ actually gets)");
+legend(R,GAMMAS.slice(1).map(k=>({c:GRAMP[k],t:"γ"+k})).concat([{c:"#111",t:"oracle best-γ (bold)"}]));
+{
+  const grid=document.createElement("div");grid.className="grid2";R.appendChild(grid);
+  MODELS.forEach(m=>{
+    const series=[];
+    for(let k=1;k<=5;k++)series.push({name:NAME[m]+" γ"+k,color:GRAMP[k],width:1.6,r:2,pts:Cs.map((c,i)=>[i,dJ(m,k,c)]),tip:v=>v.toFixed(1)+"%"});
+    series.push({name:NAME[m]+" oracle",color:HEX[m],width:2.8,r:0,dots:false,pts:Cs.map((c,i)=>[i,oracle(m,c).dJ]),tip:v=>v.toFixed(1)+"%"});
+    const cell=document.createElement("div");
+    cell.appendChild(chart({W:440,H:270,R:20,series,ymin:-70,ymax:Math.max(60,...Cs.map(c=>dJ(m,1,c))),yticks:[-60,-40,-20,0,40,120,200,280],zero:true,title:NAME[m]+" ("+g(m).arch+")",ylabel:"ΔJ% vs no-spec",tip:v=>v.toFixed(1)+"%"}));
+    grid.appendChild(cell);
+  });
+}
+desc(R,`<b>What it is.</b> The same <span class="m">ΔJ%</span> as Figure 1 but for <i>all five</i> fixed speculation lengths γ1–γ5 (grey ramp, light→dark = short→long speculation), with the oracle envelope overlaid in the model's colour.
+  <br><br><b>What it shows.</b> On <b>dense</b> models the whole fan swings positive at high C — <i>every</i> γ costs energy, and longer γ costs more (the dark lines fan highest), so there is no fixed configuration that saves energy at high load; the oracle can only mitigate by shrinking γ, then giving up. On <b>MoE</b> models the fan stays negative and tight — even the aggressive γ5 keeps saving — and the oracle rides just under the best fixed γ. The spread between the oracle and a single fixed γ (e.g. γ3) is the ceiling on what per-load γ-adaptation could recover.`);
+
+/* F3 raw J/tok */
+h3(R,"Figure 3 — Raw energy per token (the underlying measurement)");
+legend(R,GAMMAS.map(k=>({c:GRAMP[k],t:k===0?"γ0 (no spec)":"γ"+k})));
+{
+  const grid=document.createElement("div");grid.className="grid2";R.appendChild(grid);
+  MODELS.forEach(m=>{
+    const series=GAMMAS.map(k=>({name:NAME[m]+" γ"+k,color:GRAMP[k],width:k===0?2.4:1.6,r:2,dash:k===0?"":"",pts:Cs.map((c,i)=>[i,J(m,k,c)]),tip:v=>v.toFixed(3)+" J/tok"}));
+    const cell=document.createElement("div");
+    cell.appendChild(chart({W:440,H:260,R:20,series,ylog:true,yticks:m==="llama33_70b"?[0.5,1,2,4]:[0.03,0.06,0.12,0.25,0.5,1],zero:false,title:NAME[m]+" ("+g(m).arch+")",ylabel:"J / token (log)",yfmt:v=>v,tip:v=>v.toFixed(3)}));
+    grid.appendChild(cell);
+  });
+}
+desc(R,`<b>What it is.</b> The measured column <span class="m">J_per_tok = gpu_energy_J / window_tokens</span> plotted directly — GPU-package Joules per generated token over the 15 s steady window — one line per γ, log-y (energy spans ~0.04→4.7 J/tok). No derivation; this is the raw energy the figures above are computed from. <b>γ0 is the bold baseline.</b>
+  <br><br><b>What it shows.</b> Energy per token falls with concurrency for everyone (batching amortises the weight read). The architecture split is visible as <i>ordering</i>: on MoE the spec lines (γ&gt;0) sit <b>below</b> γ0 at every C; on dense they start below γ0 then <b>cross above</b> it as C grows. The dense crossings are exactly the zero-crossings of Figures 1–2.`);
+
+/* ============ §2 MECHANISM ============ */
+h2(R,"2 · Mechanism");
+
+/* F5 acceptance decomposition */
+h3(R,"Figure 4 — It is NOT falling acceptance (rejecting the draft-degradation hypothesis)");
+legend(R,GAMMAS.slice(1).map(k=>({c:GRAMP[k],t:"γ"+k})));
+{
+  const grid=document.createElement("div");grid.className="grid2";R.appendChild(grid);
+  MODELS.forEach(m=>{
+    const series=[];for(let k=1;k<=5;k++)series.push({name:NAME[m]+" γ"+k,color:GRAMP[k],width:1.8,r:2,pts:Cs.map((c,i)=>[i,ACC(m,k,c)]),tip:v=>(v*100).toFixed(1)+"%"});
+    const cell=document.createElement("div");
+    cell.appendChild(chart({W:440,H:250,R:20,series,ymin:0.3,ymax:0.85,yticks:[0.3,0.4,0.5,0.6,0.7,0.8],zero:false,title:NAME[m]+" ("+g(m).arch+")",ylabel:"per-position acceptance",yfmt:v=>(v*100)+"%",tip:v=>(v*100).toFixed(1)+"%"}));
+    grid.appendChild(cell);
+  });
+}
+desc(R,`<b>What it is.</b> Measured <span class="m">acceptance_rate</span> at each fixed γ, swept over concurrency. This is the decisive cut: acceptance <i>vs γ</i> (each grey line lower than the one above) is expected and uninteresting; acceptance <i>vs C</i> — the horizontal direction — is what tests whether larger batches degrade the draft.
+  <br><br><b>What it shows.</b> Every line is <b>flat</b>. Acceptance at a fixed γ barely moves from C8 to C512 (e.g. gpt-oss-20B γ3: 0.60→0.59; Llama-70B γ3: 0.56→0.54). The draft head is doing exactly its job at every load. <b>So the energy decay is not caused by the draft getting worse in bigger batches</b> — it is entirely on the compute side (Figure 5, the saturated-compute analysis). This cleanly removes one of the two hypothesised causes and simplifies the story.`);
+
+/* F6 compute amplification / roofline */
+h3(R,"Figure 5 — Saturated compute: how close each model drives its compute, and why only dense crosses over");
+legend(R,[{c:HEX.llama31_8b,t:"Llama-8B"},{c:HEX.llama33_70b,t:"Llama-70B"},{c:HEX.gptoss20b,t:"gpt-oss-20B"},{c:HEX.gptoss120b,t:"gpt-oss-120B"}]);
+{
+  const grid=document.createElement("div");grid.className="grid2";R.appendChild(grid);
+  // compute amplification at oracle gamma
+  const sA=MODELS.map(m=>({name:NAME[m],color:HEX[m],width:2.2,r:2.6,pts:Cs.map((c,i)=>{const o=oracle(m,c);return[i,compAmp(m,o.gm,c)];}),label:"",tip:v=>v.toFixed(2)+"×"}));
+  const cA=document.createElement("div");cA.appendChild(chart({W:440,H:270,R:20,series:sA,ymin:1,ymax:3,yticks:[1,1.5,2,2.5,3],zero:false,title:"forward-pass work per output token",ylabel:"(2γ+1)/(L̄+1)",tip:v=>v.toFixed(2)+"×"}));
+  grid.appendChild(cA);
+  // MFU: verify pass MFU for oracle gamma + baseline
+  const sM=[];MODELS.forEach(m=>{sM.push({name:NAME[m]+" verify MFU",color:HEX[m],width:2.2,r:2.6,pts:Cs.map((c,i)=>{const o=oracle(m,c);return[i,MFUv(m,o.gm,c)];}),tip:v=>v.toFixed(1)+"%"});});
+  const cM=document.createElement("div");cM.appendChild(chart({W:440,H:270,R:20,series:sM,ymin:0,ymax:20,yticks:[0,5,10,15,20],zero:false,title:"verify-pass MFU (bf16 peak)",ylabel:"MFU  %",yfmt:v=>v+"%",tip:v=>v.toFixed(1)+"%"}));
+  grid.appendChild(cM);
+}
+desc(R,`<b>The mechanism — how close each model drives its compute, and why that decides the crossover.</b> Speculation makes every step do more forward-pass work: the target verifies <span class="m">B(γ+1)</span> tokens and the draft runs γ passes, all to emit <span class="m">L̄+1</span> tokens per sequence (L̄ = mean accepted draft length = γ·acceptance). The <b>compute amplification</b> <span class="m">(2γ+1)/(L̄+1)</span> (left) — total forward-pass token-processing per output token — is roughly <b>2× and flat across C</b> (it rides on acceptance, which Figure 4 showed is flat). So speculation always does ~2× the compute; whether that costs energy is decided entirely by whether the hardware still has spare compute to hide it in.
+  <br><br><b>The verify-pass MFU (right) is that spare-compute test, and it splits the architectures.</b> It is the share of peak FLOPs the target's verify pass draws, <span class="m">(γ+1)/(L̄+1)·throughput·2·P_active/peak</span>. Because an MoE activates only a few billion parameters per token, its MFU stays <b>low and roughly flat</b> — the verify pass never runs short of compute headroom, so the extra work stays free and the energy gain persists to high load. The <b>dense</b> models sit <b>several-fold higher</b> and rise with concurrency: they consume progressively more of the compute the batch already needs, so the draft+verify work stops being free exactly where the energy crosses over. That is the saturated-compute reason the crossover is dense-only and deferred on MoE — and why the larger, more sparsely-activated MoE holds its gain to the highest load.
+  <br><br><b>Scope.</b> MFU is against the bf16 peak (MI300X has no native FP4; gpt-oss MXFP4 is dequant-emulated, so bf16 is the right denominator — pending code-trace). Absolute MFU sits well below 100% because the achievable roofline is under theoretical peak (kernel + bandwidth limits); it is the <i>cross-model ratio and the rising-with-C trend</i>, not the absolute value, that carries the argument.`);
+
+/* ============ §3 SUPPORTING ============ */
+h2(R,"3 · Supporting");
+
+/* F7 power */
+h3(R,"Figure 6 — Power draw vs concurrency (appendix)");
+legend(R,[{c:HEX.llama31_8b,t:"Llama-8B"},{c:HEX.llama33_70b,t:"Llama-70B"},{c:HEX.gptoss20b,t:"gpt-oss-20B"},{c:HEX.gptoss120b,t:"gpt-oss-120B"}]);
+{
+  const series=MODELS.map(m=>({name:NAME[m]+" γ0",color:HEX[m],width:2.2,r:2.6,pts:Cs.map((c,i)=>[i,PW(m,0,c)]),label:"",tip:v=>v.toFixed(0)+" W"}));
+  fig(R,chart({W:900,H:300,series,ymin:500,ymax:770,yticks:[500,560,620,680,740],zero:false,ylabel:"avg power  (W, γ0)",yfmt:v=>v,tip:v=>v.toFixed(0)+" W"}),"no-speculation baseline; TDP ≈ 750 W");
+}
+desc(R,`<b>What it shows.</b> The no-spec power envelope. The <b>MoE</b> models' power <i>rises</i> with concurrency (gpt-oss-120B 613→751 W, saturating at TDP by C128) — consistent with more tokens activating more distinct experts, i.e. growing weight traffic. The <b>dense</b> models are flat-to-U-shaped (Llama-8B dips mid-range then rises). This is the independent signal behind the "MoE weight-read grows with batch" half of the mechanism: for a dense model the per-step weight read is batch-invariant, so batching alone amortises it away at high load and speculation's benefit vanishes; for an MoE the weight read keeps growing, so there is persistent traffic for speculation to amortise — the reason the MoE crossover is deferred, and the larger MoE (more experts) defers it further. <b>Direct measurement of distinct-experts-per-batch needs vLLM router instrumentation (future work).</b>`);
+
+/* F8 accepted length */
+h3(R,"Figure 7 — Mean accepted length and effective speedup");
+legend(R,GAMMAS.slice(1).map(k=>({c:GRAMP[k],t:"γ"+k})));
+{
+  const grid=document.createElement("div");grid.className="grid2";R.appendChild(grid);
+  // L_emit vs C for each model (small multiples), one line per gamma
+  ["gptoss120b","llama31_8b"].forEach(m=>{
+    const series=[];for(let k=1;k<=5;k++)series.push({name:NAME[m]+" γ"+k,color:GRAMP[k],width:1.8,r:2,pts:Cs.map((c,i)=>[i,Femit(m,k,c)]),tip:v=>v.toFixed(2)});
+    const cell=document.createElement("div");
+    cell.appendChild(chart({W:440,H:260,R:20,series,ymin:1,ymax:3.6,yticks:[1,1.5,2,2.5,3,3.5],zero:false,title:NAME[m]+" — tokens/target-pass (L̄+1)",ylabel:"mean emitted / pass",tip:v=>v.toFixed(2)}));
+    grid.appendChild(cell);
+  });
+}
+desc(R,`<b>What it is.</b> The mean number of tokens emitted per target forward pass, <span class="m">L̄+1 = γ·acceptance + 1</span> — the raw speedup speculation buys (γ0 ≡ 1.0). Shown for the largest MoE and smallest dense model; the others are similar.
+  <br><br><b>What it shows.</b> Diminishing returns in γ: going γ1→γ5 lifts emitted-per-pass from ~1.7 to ~2.3 (MoE) — each extra draft token is accepted less often, so the curve compresses. And it is <b>nearly flat across C</b> (mirrors flat acceptance), so the speedup speculation offers doesn't erode with load — what erodes is the hardware's ability to deliver it for free (Figure 5). This is the numerator side of the amplification in Figure 5: modest, saturating speedup against a constant ~2× compute cost.`);
+</script>
