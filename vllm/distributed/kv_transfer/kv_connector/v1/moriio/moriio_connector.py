@@ -217,8 +217,8 @@ class MoRIIOConnector(KVConnectorBase_V1):
         ):
             # Warn only; refer to #48534, #49643
             logger.warning_once(
-                "MoRIIO READ mode with %s CUDA graphs: the per-layer KV-read "
-                "barrier can't fire inside a full graph; accuracy may "
+                "MoRIIO READ mode is running with %s CUDA graphs: per-layer "
+                "KV-read barrier can't fire inside full graph; accuracy may "
                 "degrade at high concurrency. Set cudagraph_mode=PIECEWISE "
                 "in --compilation-config.",
                 vllm_config.compilation_config.cudagraph_mode.name,
